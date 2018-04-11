@@ -1,0 +1,88 @@
+---
+title: "Exercise Modelling"
+author: "Joe Gallagher"
+date: "April 10, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Executive Summary
+
+The question of determining how well an athelete performs an exercise is an essential one which may benefit from a data driven approach. We study data derived from experiments modeling both proper bicep curl technique along with 4 other common mistakes. Building a random forest prediction model, we are able to detect with 85% accuracy which, if any, mistakes an athlete is making while performing this exercise. 
+
+## Data Preparation
+
+The data we will be using comes from the paper of Velloso et.al., "Qualitative Activity Recognition of Weight Lifting Exercises". In the experiment producing the dataset, 6 participants were asked to perform a bicep curl exercise, varying their form in 5 (correct, along with 4 common mistakes), producing 10 examples of each form. Data from  accelerometers attached to the participants (such as euler angles, raw accleration in the cartesian frame, etc.) was sampled with a sliding window approach. The data was then split into a training set (comprising 19622 observations) and a testing set (comprising 20 observations). 
+
+We first read in both the test and training data to determine which of the variables actually are present in both datasets. We omit the first few variables which should not serve as classifiers (being, e.g. subject name, experiment time, etc.) and the response we wish to predict. 
+
+```{r}
+library(data.table)
+all_training <- fread("pml-training.csv")
+all_testing <- fread("pml-testing.csv")
+
+#Find the variables which are not NA in the training set
+training_num <- all_training[,(8:159),with=FALSE]
+not_factor_train <- sapply(training_num, class) != "character"
+canUseTrain <- (colSums(is.na(training_num)) == 0) & not_factor_train
+
+#Find the variables which are not NA in the test set
+testing_num <- all_testing[,(8:159),with=FALSE]
+not_factor_test <- sapply(testing_num, class) != "character"
+canUseTest <- (colSums(is.na(testing_num)) == 0) & not_factor_test
+```
+
+It can be easily checked that all the variables remaining in the two datasets coincide, are all numeric and have no missing values. Thus we are ready to build our model.
+
+A caveat: Having read thoroughly the original paper from which this dataset was derived, we suspect that the classification problem as presented (with the fixed split of test/train data) suffers from a fundamental flaw. We discuss this more thoroughly in our Further Discussion section.
+
+## Model and Results
+
+Since our objective is simply to classify exercise type we will use a random forest model. While PCA is traditionally not used as a preprocessing measure before building such a model, we will employ it to compress our features and facilitate bootstrap reseampling. The virtue of being able to build the model multiple times is the ability to give a confidence interval for our accuracy measurement.
+
+First, select only the data from the training set which can be used.
+
+```{r}
+library(caret)
+
+#Take only the data which we can use
+data <- data.frame(training_num[,canUseTrain,with=FALSE], classe = all_training$classe)
+```
+
+This code is a proof of principle: in it, we produce one instance of our model when we have artifically restricted the size of the training data. We also time how long it takes to build this model to give us an idea of the development time of the final model.
+
+```{r cache=TRUE}
+
+set.seed(3545)
+#Split the training data further into training and testing
+inTrain <- createDataPartition(data$classe, p=0.6, list=FALSE)
+train <- data[inTrain,]
+test <- data[-inTrain,]
+
+#Run PCA on this data to cut down on the number of variables
+proc <- preProcess(train[,-53],method="pca",thresh=0.9)
+pc_train <- data.frame(predict(proc, train[,-53]), classe = train$classe)
+pc_test <- data.frame(predict(proc, test[,-53]),classe = test$classe)
+
+#Build the random forest model on a small sample, and time it.
+ptm <- proc.time()
+row_sample <- sample(1:nrow(pc_train),200)
+model <- train(classe~.,data=pc_train[row_sample,], method = "rf")
+proc.time()-ptm
+```
+
+We build our final model by running the code above, removing the row_sample restriction on the training data. A 10-fold cross-validation run gives us a small sample of accuracy data. Note: This cross-validation run is computationally expensive. Applying bootstrap methods to this accuracy data gives an average of 85% accuracy with a 95% confidence interval of [0.852,0.861].
+
+## Further Discussion
+
+A close reading of the source paper for this dataset reveals that the average "observation" in the data set does not correspond to a single exercise, but rather a sampling of accelerometer data at 0.5s time slice. The "mostly empty" variables we were forced to discard at the beginning are then summary statistics for each repetition of each exercise.
+
+It would be plausible to assume that the summary statistics might in fact be better predictors than any of the time-slice data, as they would benefit from averaging. Thus we alternately built a model trained exclusively on these summary statistics, and found with it an accuracy of 77% with a 95% confidence interval of (0.67,0.84). 
+
+
+
+
+
